@@ -1,0 +1,1 @@
+oc login -u kubeadmin -p `cat $KUBECONFIG_DIR/kubeadmin-password`

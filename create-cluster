@@ -1,0 +1,138 @@
+#!/bin/bash
+
+OCP_PREVIEW_DOWNLOADS=https://mirror.openshift.com/pub/openshift-v4/clients/ocp-dev-preview
+
+OS_CLUSTERS_BASE_DIR=${OS_CLUSTERS_BASE_DIR:=$HOME}
+
+DIR_SUFFIX=""
+SAVE_PREVIOUS=${SAVE_PREVIOUS:=NO}
+
+while [[ $# -gt 0 ]]
+do
+key="$1"
+
+case $key in
+    -v|--version)
+    INSTALL_VERSION="$2"
+    VERSION_SUFFIX="-$2"
+    shift # past argument
+    shift # past value
+    ;;
+    -n|--name)
+    CLUSTER_NAME="$2"
+    shift # past argument
+    shift # past value
+    ;;
+    -s|--save)
+    SAVE_PREVIOUS="YES"
+    shift # past argument
+    ;;
+    -l|--late)
+    DIR_SUFFIX="-late"
+    shift # past argument
+    ;;
+    --special)
+    # Choose the file you want to install from the OCP_PREVIEW_DOWNLOADS folder
+    INSTALL_FILE="4.9.0-0.nightly-2021-09-09-135648"
+    INSTALL_DIR=${INSTALL_DIR:=$OS_CLUSTERS_BASE_DIR/clusters/cluster-manual-special}
+    CLUSTER_NAME=${CLUSTER_NAME:=${USER}-special-`date +"%m-%d-%H%M"`}
+    shift # past argument
+    ;;
+    *)    # unknown option
+    shift # past argument
+    ;;
+esac
+done
+
+# set -euxo pipefail
+
+INSTALL_DIR=${INSTALL_DIR:=$OS_CLUSTERS_BASE_DIR/clusters/cluster-manual}${VERSION_SUFFIX}${DIR_SUFFIX}
+INSTALL_CONFIG_TEMPLATE_FILE=${INSTALL_CONFIG_TEMPLATE_FILE:=$OS_CLUSTERS_BASE_DIR/install-config-template.yaml}
+
+INSTALL_VERSION=${INSTALL_VERSION:=4.10}
+INSTALL_FILE=${INSTALL_FILE:=latest-$INSTALL_VERSION}
+
+echo ======== Installing: ${INSTALL_FILE} to ${INSTALL_DIR} ==============
+sleep 5
+echo ...
+
+function notify() {
+	if [ -x "$(command -v osascript)" ]; then
+		osascript -e "display notification \"$2\" with title \"$1\""
+	fi
+	echo "### $1 - $2"
+}
+
+function failed() {
+	notify "Install Failed" "An error occurred creating the cluster"
+	exit -1
+}
+trap failed ERR
+
+TMPDIR=$(mktemp -d -t openshift-install)
+trap 'rm -rf "$TMPDIR"' EXIT
+cd "$TMPDIR"
+
+if [ "$(uname)" == "Darwin" ]; then
+        curl -o openshift-install.tar.gz "${OCP_PREVIEW_DOWNLOADS}/$INSTALL_FILE/openshift-install-mac.tar.gz"
+else
+        curl -o openshift-install.tar.gz "${OCP_PREVIEW_DOWNLOADS}/$INSTALL_FILE/openshift-install-linux.tar.gz"
+fi
+
+tar -xvzf openshift-install.tar.gz
+
+if [ $SAVE_PREVIOUS = "NO" ]; then
+	# destroy any previous cluster
+	if [ -e "$INSTALL_DIR/metadata.json" ]; then
+		./openshift-install destroy cluster --dir "$INSTALL_DIR"
+	fi
+fi
+
+if [ -d "$INSTALL_DIR" ]; then
+	rm -rf "$INSTALL_DIR"
+fi
+
+# create cluster directory and install a new cluster
+mkdir -p "$INSTALL_DIR"
+
+# copy the template config file and update the cluster name based on the current date
+cp "$INSTALL_CONFIG_TEMPLATE_FILE" "$INSTALL_DIR/install-config.yaml"
+VERSION_CONVERTED=`echo $INSTALL_VERSION | sed -e 's,\.,-,g'`
+
+CLUSTER_NAME=${CLUSTER_NAME:=jephilli-$VERSION_CONVERTED-`date +"%m-%d-%H%M"`}
+SED_STRING=s/CLUSTER_NAME/"$CLUSTER_NAME"/g
+sed -i '' ${SED_STRING} "$INSTALL_DIR/install-config.yaml"
+
+echo "$(date)" "Installing to directory $INSTALL_DIR"
+
+./openshift-install create cluster --dir "$INSTALL_DIR"
+
+oc patch clusterversion/version --patch '{"spec":{"upstream":"https://openshift-release.apps.ci.l2s4.p1.openshiftapps.com/graph"}}' --type=merge --config "$INSTALL_DIR/auth/kubeconfig"
+
+machinesets=($(oc get machinesets -n openshift-machine-api -o name --config "$INSTALL_DIR/auth/kubeconfig"))
+
+# If we've got no labeled buildconfigs, return
+if [ "${#machinesets[@]}" -eq 0 ]; then
+    echo No Machinesets found ...
+else
+    for name in "${machinesets[@]}"
+    do
+        # Trim to just the name of the machineset (everything after /)
+        name="${name##*/}"
+
+        echo Scaling up "${name}"
+        oc scale --replicas=2 machineset "${name}" -n openshift-machine-api --config "$INSTALL_DIR/auth/kubeconfig"
+    done
+fi
+
+notify "Install Complete!" "Cluster succesfully created"
+
+echo ""
+oc --config "$INSTALL_DIR/auth/kubeconfig" version | grep Server
+echo ""
+echo "Web Console: $(oc --config "$INSTALL_DIR/auth/kubeconfig" whoami --show-console)"
+echo "Login: kubeadmin / $(cat "$INSTALL_DIR/auth/kubeadmin-password")"
+echo ""
+echo "oc login $(oc --config "$INSTALL_DIR/auth/kubeconfig" whoami --show-server) -u kubeadmin -p $(cat "$INSTALL_DIR/auth/kubeadmin-password")"
+echo ""
+
