@@ -49,7 +49,7 @@ done
 INSTALL_DIR=${INSTALL_DIR:=$OS_CLUSTERS_BASE_DIR/clusters/cluster-manual}${VERSION_SUFFIX}${DIR_SUFFIX}
 INSTALL_CONFIG_TEMPLATE_FILE=${INSTALL_CONFIG_TEMPLATE_FILE:=$OS_CLUSTERS_BASE_DIR/install-config-template.yaml}
 
-INSTALL_VERSION=${INSTALL_VERSION:=4.10}
+INSTALL_VERSION=${INSTALL_VERSION:=4.11}
 INSTALL_FILE=${INSTALL_FILE:=latest-$INSTALL_VERSION}
 
 echo ======== Installing: ${INSTALL_FILE} to ${INSTALL_DIR} ==============
@@ -107,7 +107,7 @@ echo "$(date)" "Installing to directory $INSTALL_DIR"
 
 ./openshift-install create cluster --dir "$INSTALL_DIR"
 
-oc patch clusterversion/version --patch '{"spec":{"upstream":"https://openshift-release.apps.ci.l2s4.p1.openshiftapps.com/graph"}}' --type=merge --config "$INSTALL_DIR/auth/kubeconfig"
+oc patch clusterversion/version --patch '{"spec":{"upstream":"https://openshift-release.apps.ci.l2s4.p1.openshiftapps.com/graph"}}' --type=merge --kubeconfig "$INSTALL_DIR/auth/kubeconfig"
 
 machinesets=($(oc get machinesets -n openshift-machine-api -o name --config "$INSTALL_DIR/auth/kubeconfig"))
 
